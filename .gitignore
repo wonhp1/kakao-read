@@ -1,0 +1,8 @@
+# 확인 결과에는 대화 내용이 들어 있다 — 올리지 않는다
+probe-report*.json
+*.report.json
+
+__pycache__/
+.venv/
+.DS_Store
+.ruff_cache/
