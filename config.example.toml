@@ -1,0 +1,42 @@
+# kakao-read 설정 — config.toml 로 복사해 고친다 (scripts/setup 이 복사해 준다).
+# config.toml 에는 방 이름·자료 경로가 들어가므로 공개 저장소에 올리지 않는다 (.gitignore 에 있음).
+
+[rooms]
+# 읽고 답할 방의 창 제목 (정확히). `uv run kakao-read windows` 로 확인한다.
+# 방은 카카오톡 목록에서 더블클릭해 별도 창으로 열어 둔다.
+watch = ["테스트 방"]
+
+# AI 답을 실제로 보내도 되는 방 (정확히, watch 에도 있어야 한다). 비어 있으면 아무 데도 보내지 않는다.
+allowed_send = []
+
+[reply]
+# true: 답을 화면에만 보여 준다 (처음엔 이걸로 답이 괜찮은지 본다).
+# false: allowed_send 에 있는 방에 확인 없이 바로 보낸다.
+dry_run = true
+
+# 어떤 메시지에 답할까
+#   "keyword" — keywords 낱말이 들어간 메시지에만 (예: "!ai 환불 언제 돼요?")
+#   "all"     — 받은 메시지를 모두 AI 에게 보여 주고, 답할 필요가 있을 때만 답한다 (호출이 많아진다)
+trigger = "keyword"
+keywords = ["!ai"]
+
+poll_seconds = 10        # 몇 초마다 방을 읽을까 (3 이상)
+read_count = 30          # 한 번에 읽을 최근 메시지 수 — 한 바퀴 사이에 이보다 많이 오면 일부를 건너뛴다
+context_messages = 20    # 답할 때 함께 보여 줄 앞 대화 줄 수
+max_per_minute = 5       # 방마다 1분에 보내는 답 최대 개수
+max_chars = 800          # 답 최대 길이 (넘으면 자른다)
+prefix = "🤖 "           # 답 앞에 붙는 표시 — AI 답이라는 걸 알 수 있게 두는 것을 권한다
+
+[ai]
+# 답을 만드는 Claude Code CLI 모델 (haiku · sonnet · opus 또는 정확한 모델 이름)
+model = "haiku"
+timeout_seconds = 120
+claude_path = ""         # 비우면 자동으로 찾는다
+
+# 역할·말투 — 이 방에서 봇이 누구인지, 어떻게 말할지
+persona = """
+스터디 방의 안내 도우미입니다. 존댓말로 두세 문장 안에 답합니다.
+"""
+
+# 답의 근거로 쓸 자료 (.md · .txt). 이 파일 기준 상대 경로도 된다. 예: ["knowledge/faq.md"]
+knowledge_files = []
