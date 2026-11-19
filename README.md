@@ -9,9 +9,20 @@
 | 플랫폼 | 읽기 | AI 답장 보내기 | 상태 |
 |---|---|---|---|
 | macOS | ✅ 접근성(AX) | ✅ | 읽기·보내기는 카카오톡 26.8에서 실측했습니다. 봇 루프는 가짜 창으로만 시험했습니다 |
-| Windows | 확인 중 | 준비 중 | `probe/`로 UI Automation이 되는지 먼저 확인합니다 ([아래](#윈도우)) |
+| Windows | ✅ 클립보드 복사 | ✅ | 읽기·보내기는 카카오톡 26.10(Windows 11)에서 실측했습니다. 창을 앞으로 가져오지 않습니다 ([아래](#윈도우)) |
 
-## 동작
+## 답장 방식 두 가지
+
+설치할 때 고르고, 나중에 `config.toml`의 `[reply] mode`로 바꿀 수 있습니다.
+
+| `mode` | 언제 답하나 | 명령 |
+|---|---|---|
+| `"command"` (기본) | **내가 명령할 때만.** 그 방의 최근 대화를 읽고 내 말투로 답을 써서, 보여 준 뒤 확인을 받고 보냅니다 | `kakao-read reply "방"` · `kakao-read reply "방" "생일 축하한다고 해줘"` (`--yes` 바로 보냄, `--dry` 보기만) |
+| `"auto"` | **새 메시지가 오면 알아서.** 아래 '동작'대로 돕니다 | `kakao-read run` |
+
+두 방식 모두 처음 보는 방이면 먼저 지난 대화를 읽어 프로필(맥락·말투)을 만듭니다.
+
+## 동작 (자동 답장)
 
 ```
 몇 초마다 방 창 읽기 → 새로 올라온 글 가려내기 → 답할 글 고르기 → Claude에게 묻기 → 보내기(또는 미리보기)
@@ -23,6 +34,16 @@
 - **답하는 조건**(`reply.trigger`)
   - `keyword`(기본): `!ai`처럼 정한 낱말이 들어간 글에만 답합니다.
   - `all`: 받은 글을 모두 Claude에게 보여 주고, 답할 필요가 있을 때만 답합니다.
+- **처음 보는 방은 지난 대화를 모두 읽고 시작합니다** (`ai.learn_history`, 기본 켜짐).
+  관계·호칭, 요즘 이야기, **나의 말투**(반말/존댓말·문장 길이·ㅋㅋ 습관·자주 쓰는 표현)를 Claude가 정리해
+  `profiles/<방>.md`에 저장하고, 답할 때 그 말투를 따릅니다. 내 실제 메시지 예시도 함께 남깁니다.
+  - 방 창을 맨 위까지 올려 과거 메시지를 불러온 뒤 다 읽고 맨 아래로 되돌립니다. 포커스·마우스는 그대로입니다.
+    - Windows: 휠 메시지로 올리고 클립보드로 읽습니다 (메시지 400여 개에 10~50초).
+    - macOS: 스크롤바를 맨 위로 맞추면 카카오톡이 약 50줄씩 더 불러옵니다. 다 불러오면 위에서부터 한 화면씩 내리며
+      보이는 줄만 읽습니다 (화면 밖 줄은 접근성으로 아주 느려서). 메시지 1300개쯤에 1분 안팎(26.9 실측),
+      Claude 정리까지 2분쯤. 그동안 방 창이 화면에 보여야 합니다 (최소화·숨김이면 꺼내 달라고 알립니다).
+  - 그다음부터는 저장한 프로필을 쓰고 **새로 올라온 메시지만** 봅니다. 다시 만들려면 `kakao-read learn "방"`.
+  - 프로필에는 대화 요약이 들어 있습니다. `.gitignore`에 있으니 공개 저장소에 올리지 마세요.
 - **시작할 때 화면에 있던 글에는 답하지 않습니다.** 켠 뒤에 새로 올라온 글에만 답합니다.
 - **안전장치**
   - 방마다 1분에 보내는 답의 수에 상한이 있습니다.
@@ -45,6 +66,9 @@ bash scripts/setup.sh
 1. **uv**와 **Claude Code**가 없으면 공식 설치 스크립트로 설치합니다.
 2. **Claude Code에 로그인되어 있지 않으면** 방법을 안내하고 로그인 창을 띄웁니다.
 3. 파이썬 패키지를 설치하고 `config.toml`을 만든 다음 점검(`doctor`)을 실행합니다.
+   - 점검 항목: Claude Code 설치·로그인, macOS 버전, **카카오톡 설치·실행·버전**(실측한 26.8·26.9와 다르면 ⚠️),
+     **손쉬운 사용 권한**(켜야 할 앱 이름까지), 열린 방 창.
+   - 안 된 것이 있으면 끝에 **'다음 할 일'** 로 고치는 법을 차례로 보여 줍니다. 하고 나서 `uv run kakao-read doctor`로 다시 점검합니다.
 
 여러 번 실행해도 됩니다. 이미 있는 도구는 건너뛰고, `config.toml`은 덮어쓰지 않습니다.
 
@@ -73,8 +97,11 @@ bash scripts/setup.sh
 
 ```bash
 uv run kakao-read windows                     # 열린 카카오톡 창 제목 → config.toml 의 rooms.watch 에
-uv run kakao-read doctor                      # 점검: 엔진 설치·로그인·설정·방 창
+uv run kakao-read doctor                      # 점검: 엔진·로그인·카카오톡 버전·권한·방 창 → 다음 할 일
 uv run kakao-read read "방 이름" -n 20        # 최근 메시지 보기
+uv run kakao-read send "방 이름" "글" --yes    # 메시지 하나 직접 보내기 (--yes 없으면 미리보기)
+uv run kakao-read reply "방 이름" ["요청"]     # (명령 모드) 지금 답장 쓰기 → 확인 후 보내기
+uv run kakao-read learn "방 이름"              # 지난 대화 전부 → 방 프로필(맥락·말투) 새로 만들기
 uv run kakao-read ask "방 이름" "시험 질문"    # Claude 답 미리보기 (보내지 않음)
 uv run kakao-read run                         # 봇 실행 (Ctrl+C 로 멈춤)
 ```
@@ -94,28 +121,44 @@ uv run kakao-read run                         # 봇 실행 (Ctrl+C 로 멈춤)
 
 ## 윈도우
 
-윈도우 카카오톡도 같은 방식(**UI Automation**)으로 읽을 수 있는지 아직 확인하지 못했습니다.
-그래서 먼저 확인용 스크립트를 돌려야 합니다. 이 스크립트는 읽기만 합니다. 창을 앞으로 가져오거나 클릭·키 입력·클립보드를 쓰지 않습니다.
-
 ```powershell
 git clone https://github.com/wonhp1/kakao-read.git
 cd kakao-read
 powershell -ExecutionPolicy ByPass -File scripts\setup.ps1     # uv·Claude Code 설치, 로그인 안내
 
 # 방을 더블클릭해 별도 창으로 연다 (최소화하지 않기)
+uv run kakao-read windows
+uv run kakao-read read "방 이름" -n 20
+uv run kakao-read send "방 이름" "글" --yes
+```
+
+윈도우 카카오톡(26.10)은 UI Automation에 메시지 목록을 내주지 않습니다 (probe 결과: 입력창과 빈 목록 컨트롤뿐).
+그래서 Win32 창 메시지로 읽고 보냅니다. **창을 앞으로 가져오거나 포커스를 바꾸지 않습니다.**
+
+- **읽기**: 방 창의 메시지 목록에 Ctrl+A·Ctrl+C 키 메시지를 보내 대화를 클립보드로 받고,
+  `[보낸 사람] [오후 3:45] 내용` 줄을 나눕니다.
+  - 원래 클립보드의 **글**은 읽은 뒤 되돌려 놓습니다. 그림·파일이 들어 있었으면 되돌리지 못합니다.
+  - 읽은 뒤 방 창에서 대화 전체가 선택된 것처럼(회색) 보일 수 있습니다.
+  - 내가 보낸 글 구분: 1:1 방은 방 제목이 아닌 쪽, 단톡방은 `KAKAO_MY_NAME` 환경 변수(카톡 이름)로 정합니다.
+    이 프로그램이 한 번 보내고 나면 그 이름을 기억합니다.
+- **보내기**: 카카오톡은 WM_SETTEXT로 넣은 글을 '입력된 글'로 치지 않아 Enter를 눌러도 보내지 않습니다
+  (전송 버튼도 꺼진 채). 그래서 ① WM_CHAR로 한 자씩 치고 ② 입력창에 Enter를 바로 보내 입력을 확정시킨 뒤
+  ③ WM_SETTEXT로 정확한 글로 맞추고 ④ Enter를 PostMessage로 보냅니다.
+  - 보낸 뒤 대화를 다시 읽어 **새 말풍선을 확인**합니다. 확인 못 하면 **최대 3번** 다시 시도합니다.
+  - 다시 시도하는 것은 입력창에 글이 그대로 남아 **안 나간 게 확실할 때뿐**입니다.
+    글이 사라졌는데 말풍선이 안 보이면 나갔을 수 있으니 다시 보내지 않습니다 (중복 방지).
+  - 입력창에 사람이 쓰던 글이 있으면 덮어쓰지 않습니다.
+- 카카오톡을 **관리자 권한으로 실행했다면** PowerShell도 관리자 권한으로 열어야 합니다.
+
+### probe (진단용)
+
+다른 카카오톡 버전에서 창 구조가 다를 때 확인하는 스크립트입니다. 읽기만 합니다.
+
+```powershell
 uv run probe/kakao_win_probe.py windows
 uv run probe/kakao_win_probe.py probe "방 이름" --expect "화면에 보이는 메시지 일부"
 ```
 
-맨 끝의 `[판정]`을 확인합니다.
-
-| 판정 | 뜻 | 다음 단계 |
-|---|---|---|
-| 가능 | UIA에서 메시지 글이 나옵니다 | 이 경로로 `src/kakao_read/backends/windows.py`의 읽기·보내기를 채웁니다 |
-| 부분 가능 | Win32 창 글자에서만 나옵니다 | 그 경로로 만들 수 있는지 봅니다 |
-| 못 찾음 | 어디에도 나오지 않습니다 | NVDA(무료 스크린리더)를 켠 채로 카카오톡을 다시 켜고 확인합니다 |
-
-- 카카오톡을 **관리자 권한으로 실행했다면** PowerShell도 관리자 권한으로 열어야 합니다.
 - 자세한 결과는 `probe-report.json`에 남습니다.
   - 이 파일에는 **대화 일부가 들어 있습니다.** 긴 글은 앞 8자만 남기고, `--full`을 주면 전체를 남깁니다.
   - `.gitignore`에 들어 있습니다. 공개 저장소에 올리지 마세요.
@@ -125,16 +168,17 @@ uv run probe/kakao_win_probe.py probe "방 이름" --expect "화면에 보이는
 
 ```
 src/kakao_read/
-  cli.py            명령 (doctor · login-help · windows · read · ask · run)
+  cli.py            명령 (doctor · login-help · windows · read · send · reply · learn · ask · run)
   bot.py            한 바퀴: 읽기 → 새 글 → 답할 글 → Claude → 보내기
+  profile.py        처음 보는 방: 지난 대화 전부 → 맥락·나의 말투 정리 (profiles/<방>.md)
   tracker.py        새로 올라온 글 가려내기 (번호가 없는 화면 글을 앞뒤 겹침으로 맞춘다)
   engine.py         Claude Code CLI 호출 (도구 차단), 설치·로그인 확인
   config.py         config.toml
   backends/
     base.py         플랫폼 공통 모양 (windows · read · send)
     mac.py          macOS — mac_ax.py 를 감싼다
-    mac_ax.py       kakaotalk 스킬의 AX 읽기·보내기 사본
-    windows.py      윈도우 — probe 결과를 보고 채울 자리
+    mac_ax.py       kakaotalk 스킬의 AX 읽기·보내기·지난 대화 전부 읽기(read_history) 사본
+    windows.py      윈도우 — Win32 메시지로 읽기(클립보드)·보내기(WM_CHAR + Enter), 확인·재시도 3번
 probe/kakao_win_probe.py   윈도우 UIA 확인용 (읽기 전용)
 ```
 

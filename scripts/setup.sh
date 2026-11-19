@@ -3,8 +3,33 @@
 #   1. uv · Claude Code 가 없으면 공식 설치 스크립트로 설치
 #   2. Claude Code 로그인이 안 돼 있으면 방법을 보여 주고 로그인 창을 띄운다
 #   3. 파이썬 패키지 설치, config.toml 만들기, 점검
+#   bash scripts/setup.sh --mode command --no-login   # 묻지 않고 (AI 에이전트용)
+#     --mode command|auto  답장 방식. 주면 묻지 않고 config.toml 에 적는다
+#     --no-login           Claude 로그인 창을 띄우지 않고 상태만 알려 준다
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+MODE=""
+NO_LOGIN=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode) MODE="${2:-}"; shift 2 ;;
+    --no-login) NO_LOGIN=1; shift ;;
+    *) echo "모르는 옵션: $1 (--mode command|auto, --no-login)"; exit 2 ;;
+  esac
+done
+if [[ -n "$MODE" && "$MODE" != "command" && "$MODE" != "auto" ]]; then
+  echo "--mode 는 command 또는 auto 입니다"; exit 2
+fi
+
+set_mode() {
+  sed -i '' -E "s/^mode = \"(command|auto)\"/mode = \"$1\"/" config.toml
+  if [[ "$1" == "auto" ]]; then
+    echo "답장 방식: 자동 답장. 처음엔 dry_run = true 라 미리보기만 하고, 실제 전송은 rooms.allowed_send 의 방만 합니다."
+  else
+    echo "답장 방식: 명령할 때만 (kakao-read reply)."
+  fi
+}
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
@@ -46,7 +71,7 @@ else
   · 브라우저가 안 열리면 아래에 나오는 주소를 복사해 브라우저에 붙여 넣으세요.
   · 브라우저가 코드를 보여 주면 복사해서 이 터미널에 붙여 넣고 Enter.
 EOF
-  if [[ -t 0 ]]; then
+  if [[ -t 0 && "$NO_LOGIN" == 0 ]]; then
     read -r -p "Enter 를 누르면 로그인을 시작합니다 (건너뛰려면 n): " answer
     if [[ "${answer:-}" != "n" && "${answer:-}" != "N" ]]; then
       claude auth login || true
@@ -61,15 +86,34 @@ EOF
 fi
 
 bold "4/5 파이썬 패키지"
-uv sync --quiet
+if ! uv sync --quiet; then
+  echo "기본 Python 으로 실패해 Python 3.13 으로 다시 합니다"
+  uv python install 3.13
+  uv sync --quiet --python 3.13
+fi
 echo "완료"
 
 bold "5/5 설정 파일"
+created=0
 if [[ -f config.toml ]]; then
   echo "config.toml 이 이미 있어 그대로 둡니다"
 else
   cp config.example.toml config.toml
+  created=1
   echo "config.toml 을 만들었습니다 — rooms.watch 에 방 창 제목을 넣으세요"
+fi
+if [[ -n "$MODE" ]]; then
+  set_mode "$MODE"
+elif [[ "$created" == 1 ]]; then
+  cat <<'EOF'
+
+답장 방식을 고르세요 (나중에 config.toml 의 [reply] mode 로 바꿀 수 있습니다)
+  1) 명령할 때만 (기본) — kakao-read reply "방" 을 실행할 때만, 답을 보여 주고 확인받은 뒤 보냅니다
+  2) 자동 답장          — kakao-read run 을 켜 두면 새 메시지에 알아서 답합니다
+EOF
+  choice=""
+  if [[ -t 0 ]]; then read -r -p "번호 (Enter = 1): " choice; fi
+  if [[ "$choice" == "2" ]]; then set_mode auto; else set_mode command; fi
 fi
 
 bold "점검"
@@ -77,12 +121,9 @@ uv run --quiet kakao-read doctor || true
 
 cat <<'EOF'
 
-다음 할 일
-  1. 손쉬운 사용 권한: 시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용 에서
-     이 명령을 실행한 앱(터미널 등)을 켜고, 그 앱을 다시 엽니다.
-  2. 카카오톡에서 답할 방을 더블클릭해 별도 창으로 엽니다.
-  3. uv run kakao-read windows   → 창 제목을 확인해 config.toml 의 rooms.watch 에 넣습니다.
-  4. uv run kakao-read ask "방 이름" "시험 질문"   → 답이 괜찮은지 봅니다 (보내지 않음).
-  5. uv run kakao-read run       → dry_run = true 상태로 먼저 돌려 봅니다.
-  6. 괜찮으면 config.toml 에서 allowed_send 에 방을 넣고 dry_run = false 로 바꿉니다.
+위 점검에서 ❌ 가 있으면 '다음 할 일'을 차례로 하고 다시 점검하세요:  uv run kakao-read doctor
+쓰는 법
+  (명령 모드) uv run kakao-read reply "방 이름" ["요청"]  → 답을 보여 주고 확인받은 뒤 보냅니다
+  (자동 모드) uv run kakao-read run  → 처음엔 dry_run = true 로 미리보기만. 괜찮으면 config.toml 에서
+              allowed_send 에 방을 넣고 dry_run = false
 EOF

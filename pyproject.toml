@@ -1,7 +1,7 @@
 [project]
 name = "kakao-read"
 version = "0.2.0"
-description = "카카오톡 PC 방 창을 화면 접근성으로 읽고 Claude 가 답장하는 도구 (macOS, 윈도우 준비 중)"
+description = "카카오톡 PC 방 창을 화면 접근성으로 읽고 Claude 가 답장하는 도구 (macOS, Windows)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

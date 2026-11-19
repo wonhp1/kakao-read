@@ -11,7 +11,7 @@ kakaobot 프로젝트(github.com/wonhp1/kakaobot, 2026-09~10)에서 실측으로
 
   읽기 (창을 건드리지 않는다 · 최소화·⌘H 숨김·다른 데스크탑·전체 화면 뒤의 창도)
     windows                          열린 카카오톡 창 제목
-    read    "방" [-n 20]             방 창의 최근 메시지
+    read    "방" [-n 20] [--all]     방 창의 최근 메시지 (--all: 맨 위까지 올려 지난 대화 전부 · 창이 보여야 함)
     notices "방" [--top 20]          '댓글 알림' 창에서 그 방 알림만
 
   화면 조작 (메뉴·스레드 창을 잠깐 연다 — 마우스·포커스는 움직이지 않는다 · 창이 화면에 보여야 함)
@@ -384,6 +384,11 @@ def read_room(ax: AX, room: str, count: int) -> tuple[list[Message], bool]:
         if parsed is not None:
             raw.append(parsed)
     raw.reverse()
+    return _messages(raw), scrolled_up
+
+
+def _messages(raw: list[tuple]) -> list[Message]:
+    """_parse_cell 결과(오래된 것부터) → 메시지. 이름표 없는 연속 줄은 앞 사람 이름을 물려받는다."""
     out: list[Message] = []
     last: str | None = None
     for text, label, outgoing, stamp, thread_comment in raw:
@@ -394,7 +399,88 @@ def read_room(ax: AX, room: str, count: int) -> tuple[list[Message], bool]:
             last = label or last
             sender = last
         out.append(Message(text, sender, outgoing and not system, stamp, thread_comment, system))
-    return out, scrolled_up
+    return out
+
+
+HISTORY_WAIT = 2.5     # 맨 위로 올린 뒤 예전 줄이 붙기를 기다리는 시간 (26.9 실측: 한 번에 약 50줄, 1초 안)
+HISTORY_STALL = 3      # 이만큼 연달아 안 늘면 대화 처음으로 본다
+HISTORY_PAGE = 0.8     # 한 번에 내리는 양 (보이는 높이의 비율) — 줄을 빠뜨리지 않게 겹쳐 내린다
+
+
+def read_history(ax: AX, room: str, max_messages: int, progress=None) -> list[Message]:
+    """방을 맨 위까지 올려 지난 대화를 불러온 뒤 모두 읽는다 (오래된 것부터, 최근 max_messages 개).
+
+    1) 불러오기 — 스크롤바를 맨 위로 맞추면 카카오톡이 예전 줄을 약 50줄씩 붙인다. 안 늘 때까지(또는 한도까지).
+    2) 읽기 — 화면 밖 줄은 접근성으로 아주 느리다 (1415줄 516초). 그래서 위에서부터 한 화면씩 내리며
+       보이는 줄(AXVisibleRows)만 읽는다 (같은 1415줄 40초).
+    3) 끝나면(오류여도) 맨 아래로 되돌린다. 마우스·포커스는 건드리지 않고 창을 앞으로 가져오지 않는다.
+    스크롤은 창이 화면에 보여야 해서 최소화·숨김 창은 꺼내 달라고 한다. progress(n) 은 불러온 줄·읽은 줄 수.
+    """
+    win = ax.window(room, need="visible")
+    area, table, bar = message_area(ax, win)
+    if bar is None:
+        return read_room(ax, room, max_messages)[0]
+
+    def rows() -> list:
+        return [r for r in ax.kids(table) if ax.attr(r, "AXRole") == "AXRow"]
+
+    try:
+        n, stall = len(rows()), 0
+        while n < max_messages and stall < HISTORY_STALL:
+            ax.set_attr(bar, "AXValue", 0.0)
+            deadline = time.monotonic() + HISTORY_WAIT
+            while time.monotonic() < deadline and len(rows()) <= n:
+                time.sleep(0.25)
+            now = len(rows())
+            stall = stall + 1 if now <= n else 0
+            n = now
+            if progress:
+                progress(n)
+        # 처음까지 다 불러왔으면 맨 위부터 읽는다. 한도에서 멈췄으면 맨 위에 닿는 순간 또 불러오니 한 화면 아래부터.
+        start = 0.0 if stall >= HISTORY_STALL else _page(ax, area, table)
+        for _ in range(2):          # 읽는 중에 위에 줄이 더 붙으면(번호가 밀림) 한 번 처음부터 다시
+            got = _read_visible_pass(ax, area, table, bar, rows, progress, start)
+            if got is not None:
+                break
+        else:
+            raise KakaoError("읽는 동안 예전 줄이 계속 붙어 다 읽지 못했습니다 — 다시 해 주세요")
+    finally:
+        ax.set_attr(bar, "AXValue", 1.0)
+        time.sleep(0.3)
+    raw = [got[i] for i in sorted(got) if got[i] is not None]
+    return _messages(raw)[-max_messages:]
+
+
+def _page(ax: AX, area, table) -> float:
+    """한 번에 내릴 스크롤바 값 (보이는 높이 × HISTORY_PAGE ÷ 스크롤할 수 있는 높이)."""
+    view, tbl = rect(ax, area), rect(ax, table)
+    span = (tbl[3] - view[3]) if view and tbl else 0
+    return view[3] * HISTORY_PAGE / span if span > 0 else 1.0
+
+
+def _read_visible_pass(ax: AX, area, table, bar, rows, progress, start: float = 0.0) -> dict | None:
+    """위에서 아래로 한 화면씩 내리며 보이는 줄만 읽는다. {줄 번호: _parse_cell 결과}.
+    위에 줄이 새로 붙어 번호가 밀리면 None (아래에 새 메시지가 붙는 것은 괜찮다)."""
+    first = next(iter(rows()), None)
+    got: dict = {}
+    value = start
+    while True:
+        ax.set_attr(bar, "AXValue", min(1.0, value))
+        time.sleep(0.12)
+        head = next(iter(rows()), None)
+        if first is not None and head is not None and not head == first:
+            return None
+        for r in ax.attr(table, "AXVisibleRows") or []:
+            i = ax.attr(r, "AXIndex")
+            if i is None or i in got:
+                continue
+            cell = next(iter(ax.kids(r)), None)
+            got[i] = _parse_cell(ax, cell) if cell is not None else None
+        if progress:
+            progress(len(got))
+        if value >= 1.0:
+            return got
+        value += _page(ax, area, table)
 
 
 @dataclass
@@ -1256,7 +1342,9 @@ def main() -> int:
     sub.add_parser("windows", help="열린 카카오톡 창 제목")
     p = sub.add_parser("read", help="방 창의 최근 메시지")
     p.add_argument("room")
-    p.add_argument("-n", "--count", type=int, default=20)
+    p.add_argument("-n", "--count", type=int, default=None, help="최근 몇 개 (기본 20, --all 이면 2000)")
+    p.add_argument("--all", action="store_true",
+                   help="맨 위까지 올려 지난 대화를 모두 읽는다 (창이 화면에 보여야 함 · 수백 개면 1분 안팎)")
     p = sub.add_parser("notices", help="'댓글 알림'에서 그 방 알림")
     p.add_argument("room")
     p.add_argument("--top", type=int, default=20)
@@ -1342,7 +1430,8 @@ def main() -> int:
                 _print(args, preview, "\n".join(lines))
                 return 0
             check_allowed(args.room)
-        if (args.cmd in ("thread", "photo", "send", "reply", "send-file") and bot_running()
+        if ((args.cmd in ("thread", "photo", "send", "reply", "send-file") or getattr(args, "all", False))
+                and bot_running()
                 and not args.force):
             raise KakaoError("kakaobot 봇이 돌고 있어 카카오톡 창 조작이 겹칠 수 있습니다 — "
                              "메뉴바에서 봇을 멈춘 뒤 다시 하세요")
@@ -1351,8 +1440,16 @@ def main() -> int:
             wins = [{"title": ax.attr(w, "AXTitle") or "", "state": state} for w, state in ax.all_windows()]
             _print(args, wins, "\n".join(f"{w['title'] or '(제목 없음 — 스레드 창 등)'}"
                                          + ("" if w["state"] == "보임" else f"  ({w['state']})") for w in wins))
+        elif args.cmd == "read" and args.all:
+            msgs = read_history(ax, args.room, args.count or 2000,
+                                progress=lambda n: print(f"  {n}줄", end="\r", file=sys.stderr, flush=True))
+            print(file=sys.stderr)
+            _print(args, {"room": args.room, "scrolled_up": False, "messages": [asdict(m) for m in msgs]},
+                   "\n".join(f"[{'공지' if m.system else ('나' if m.outgoing else (m.sender or '?'))}]"
+                             f"{' [스레드 댓글]' if m.thread_comment else ''} {m.text}"
+                             + (f"  ({m.time})" if m.time else "") for m in msgs))
         elif args.cmd == "read":
-            msgs, scrolled = read_room(ax, args.room, args.count)
+            msgs, scrolled = read_room(ax, args.room, args.count or 20)
             if scrolled:
                 print("⚠️ 방 창이 위로 스크롤돼 있어 최근 메시지가 아닐 수 있습니다", file=sys.stderr)
             _print(args, {"room": args.room, "scrolled_up": scrolled, "messages": [asdict(m) for m in msgs]},

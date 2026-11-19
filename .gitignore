@@ -10,5 +10,6 @@ __pycache__/
 # 개인 설정·자료 — 방 이름, 역할, 자료 경로가 들어 있다
 config.toml
 knowledge/
+profiles/
 logs/
 .pytest_cache/

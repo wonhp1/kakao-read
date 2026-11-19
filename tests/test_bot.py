@@ -64,7 +64,8 @@ class Clock:
 
 
 def make(**kw):
-    defaults = dict(watch=[ROOM], allowed_send=[ROOM], dry_run=False, trigger="all", prefix="")
+    defaults = dict(watch=[ROOM], allowed_send=[ROOM], dry_run=False, trigger="all", prefix="",
+                    learn_history=False, profile_dir="__no_profiles__")
     defaults.update(kw)
     cfg = Config(**defaults)
     backend, engine, clock, logs = FakeBackend(), FakeEngine(), Clock(), []

@@ -47,3 +47,6 @@ class Backend(Protocol):
 
     def send(self, room: str, text: str) -> str:
         """일반 메시지 하나를 보내고 확인 결과를 돌려준다. BackendError·SendUncertain 을 낸다."""
+
+    # 선택: history(room, max_messages, progress=None) -> list[ChatMessage]
+    #   방을 위로 올려 지난 대화까지 읽는다 (오래된 것부터). 없는 백엔드는 read() 로 보이는 만큼만 쓴다.
